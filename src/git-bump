@@ -1,0 +1,74 @@
+#!/bin/sh
+
+set -Ceu
+
+progname="${0##*/}"
+
+if [ $# -ne 2 ]; then
+    printf >&2 'Usage: %s <oldversion> <newversion>\n' "$progname"
+    exit 1
+fi
+
+oldversion="$1"
+newversion="$2"
+tag="v$newversion"
+
+if [ ! -f VERSION ]; then
+    printf >&2 '%s: no VERSION file, aborting\n' "$progname"
+    exit 1
+fi
+
+if [ -n "`git status --porcelain`" ]; then
+    git status
+    printf >&2 '%s: unclean tree, aborting\n' "$progname"
+    exit 1
+fi
+
+version=`cat VERSION`
+case $version in
+*+)
+    version="${version%+}"
+    ;;
+*)
+    printf >&2 '%s: already in tagged release: %s\n' "$progname" "$version"
+    ;;
+esac
+if [ "x$oldversion" != "x$version" ]; then
+    printf >&2 '%s: old version mismatch: version is %s but expected %s\n' \
+	"$progname" "$version" "$oldversion"
+    exit 1
+fi
+
+if [ -e ".git/refs/tags/$tag" ]; then
+    printf >&2 '%s: tag already exists: %s\n' "$progname" "$tag"
+    exit 1
+fi
+
+if ! python - "$oldversion" "$newversion" <<EOF
+from pkg_resources import parse_version
+import sys
+if not parse_version(sys.argv[1]) < parse_version(sys.argv[2]):
+    sys.exit(1)
+EOF
+then
+    printf >&2 '%s: version does not advance: %s --/--> %s\n' "$progname" \
+	"$oldversion" "$newversion"
+    exit 1
+fi
+
+head=`git rev-parse HEAD`
+ok=
+clean ()
+{
+    [ -n "$ok" ] && return
+    git tag -d "$tag" 2>/dev/null || :
+    git reset --hard "$head" || :
+}
+trap clean EXIT HUP INT TERM
+
+echo "${newversion}" > VERSION.tmp && mv -f VERSION.tmp VERSION
+git commit -m "Bump version to ${newversion}." VERSION
+git tag -a -m "$tag" "$tag"
+echo "${newversion}+" > VERSION.tmp && mv -f VERSION.tmp VERSION
+git commit -m "Bump version to ${newversion}+." VERSION
+ok=1

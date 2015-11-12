@@ -1,0 +1,19 @@
+#!/bin/sh
+set -e
+
+# USAGE: git migrate new-branch-name parent-branch commit-range
+new_branch_name=$1
+parent_branch=$2
+commit_range=$3
+
+current=$(git symbolic-ref --short HEAD)
+if [ -z "$parent_branch" ]; then
+    parent_branch=$current
+fi
+echorun git checkout -b $new_branch_name
+echorun git branch --force $new_branch_name ${commit_range-'$current@{u}'} --set-upstream-to=$parent_branch
+echorun git rebase --onto ${parent_branch-master} $new_branch_name
+echorun git checkout $current
+echorun git reset --hard $current@{u}
+echorun git checkout $new_branch_name
+echorun git status --short

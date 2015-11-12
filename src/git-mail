@@ -1,0 +1,129 @@
+#!/bin/sh
+
+set -e
+
+upstream_branch=master
+
+while getopts ":auy" opt; do
+    case $opt in
+        a)
+            amend_cl=1
+            ;;
+        u)
+            upstream_branch=$2
+            shift;
+            ;;
+        y)
+            do_not_diff=1
+            ;;
+        \?)
+            echo "Invalid option: -$OPTARG" >&2
+            exit
+            ;;
+    esac
+done
+
+name=$1
+echorun git fetch | grep . && exit 1
+echorun git status --short | grep . && exit 1
+workingbranch=`git symbolic-ref --short HEAD`
+if [ "$upstream_branch" == "$workingbranch" ]; then
+    echo "Cannot pull against the same branch you're working on."
+    exit 1
+fi
+base=`git show origin/$upstream_branch | head -1 | sed 's/^commit //'`
+head=`git show | head -1 | sed 's/^commit //'`
+if [ "master" == "$workingbranch" ]; then
+    if [ -n "$name" ]; then
+        workingbranch=$name
+    else
+        echo "Please migrate to a named branch first or provide a short name."
+        exit 1
+    fi
+    echorun git migrate $workingbranch origin/$upstream_branch $base..$head
+    git checkout $workingbranch
+fi
+stamp=
+pullreqbranch=`git branch | sed 's/.* //' | grep -- "-$USER-" | grep -- "-$workingbranch\$" || true`
+newpullrequest=
+if [ -z "$pullreqbranch" ]; then
+    stamp=`date "+%Y%m%d-%H%M"`
+    pullreqbranch="$stamp-$USER-$workingbranch"
+    newpullrequest=1
+fi
+
+# Ensure that we're all up to date.
+echorun git checkout $upstream_branch
+echorun git fetch
+echorun git merge --ff-only
+echorun git checkout $workingbranch
+echorun git merge --ff-only
+
+if [ -e ".git/hooks/pre-mail" ]; then
+    .git/hooks/pre-mail
+fi
+
+# Create the clean, squashed pull request.
+if [ -n "$newpullrequest" ]; then
+    echorun git checkout -b $pullreqbranch $upstream_branch
+    echorun git diff origin/$upstream_branch $workingbranch | patch -p1
+else
+    echorun git checkout $pullreqbranch
+    echorun git update
+    echorun git diff $pullreqbranch $workingbranch | patch -p1
+fi
+
+# Help the user review their changes and write a pull request message.
+set +e
+# To turn this off, run with -y
+if [ -z "$do_not_diff" ]; then
+    echorun git difftool -y origin/$upstream_branch >/dev/null 2>&1 &
+fi
+commitmsg=/tmp/$workingbranch-commit.txt
+emacs -nw $commitmsg || true
+if [ ! -s "$commitmsg" ]; then
+    echo "Abandoning pull request."
+    echorun git reset --hard
+    echorun git checkout $workingbranch
+    echorun git branch -D $pullreqbranch
+fi
+
+# Check in their changes to the pull request branch with the above message.
+echorun git add -A
+set -e
+commitargs=
+if [ -z "$newpullrequest" -a -n "$amend_cl" ]; then
+    commitargs=" --amend "
+fi
+echorun git commit -a -F $commitmsg $commitargs
+
+# Push to the remote and create the actual pull request.
+pushargs=
+if [ -z "$newpullrequest" -a -n "$amend_cl" ]; then
+    pushargs="$pushargs --force"
+fi
+echorun git push origin $pullreqbranch $pushargs
+
+prargs=" -h $pullreqbranch -F $commitmsg"
+if [ -n "$newpullrequest" ]; then
+    prargs="$prargs -b $upstream_branch"
+fi
+if [ -n "$stamp" ]; then
+    if [ -z "$name" ]; then
+        issueid=`echo $workingbranch | perl -ne 'if (/\bi(\d+)\b/) {print $1}'`
+        if [ -n "$issueid" ]; then
+            echorun hub pull-request -i $issueid $prargs
+        else
+            echorun hub pull-request $workingbranch $prargs
+        fi
+    else
+        echorun hub pull-request $prargs
+    fi
+else
+    echo Updated $pullreqbranch
+fi
+
+# Return to the working branch, and open the pull request in the browser.
+echorun git checkout $workingbranch
+origin=`git remote -v | head -1 | sed 's/.*github.com://;s/\.git.*//'`
+open "https://github.com/$origin/compare/$pullreqbranch"

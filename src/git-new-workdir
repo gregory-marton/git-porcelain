@@ -1,0 +1,155 @@
+#!/bin/sh
+
+# Utility to make a new working directory for an existing repository
+#
+# The working directory has its own index and can be on its own branch
+# but shares configuration, branch and remote namespace, storage, &c.,
+# of the repository, so you don't have to push or pull to synchronize
+# your work directories.  But don't do stuff simultaneously in the
+# different work directories -- they might explode.
+#
+# Example: Clone a repository and start working in a private branch
+# based on an upstream feature branch, but keep the master branch of
+# the repository available for reference.
+#
+#   git clone https://example.com/repo.git
+#   (cd repo && git branch 20130204-feature-branch origin/cool-feature)
+#   git new-workdir repo work 20130204-feature-branch
+#
+# If you pass in a relative pathname to the repository, the new working
+# directory will use relative pathnames to the repository parts, so
+# that the repository and working directory can be moved in the file
+# system as long as their relative positions are fixed.  If you want to
+# refer to the repository instead by an absolute pathname, so that the
+# working directory can be moved independently of the repository, just
+# pass in an absolute pathname to the repository.
+
+# Copyright (c) 2013 Taylor R. Campbell
+# All rights reserved.
+#
+# Redistribution and use in source and binary forms, with or without
+# modification, are permitted provided that the following conditions
+# are met:
+# 1. Redistributions of source code must retain the above copyright
+#    notice, this list of conditions and the following disclaimer.
+# 2. Redistributions in binary form must reproduce the above copyright
+#    notice, this list of conditions and the following disclaimer in the
+#    documentation and/or other materials provided with the distribution.
+#
+# THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS ``AS IS'' AND ANY EXPRESS
+# OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES
+# OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.  IN
+# NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY DIRECT, INDIRECT,
+# INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+# LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA,
+# OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+# LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+# NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
+# EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+set -Ceu
+
+default_subdirs=
+default_subdir () { default_subdirs="${default_subdirs} $1"; }
+default_subdir config
+default_subdir hooks
+default_subdir info
+default_subdir logs/refs
+default_subdir objects
+default_subdir packed-refs
+default_subdir refs
+default_subdir remotes
+default_subdir rr-cache         # XXX What is this?
+default_subdir svn              # XXX Seems kinda silly...what else?
+
+: ${GIT_SUBDIRS="${default_subdirs}"}
+: ${GIT_EXTRA_SUBDIRS=""}
+
+program_name="${0##*/}"
+
+usage ()
+{
+  local status=$1
+  printf >&2 'Usage: %s <repo> <workdir> [<branch>]\n' "$program_name"
+  exit "$status"
+}
+
+error ()
+{
+  warn "$@"
+  exit 1
+}
+
+warn ()
+{
+  printf >&2 '%s: ' "$program_name"
+  printf >&2 "$@"
+  printf >&2 '\n'
+}
+
+if [ $# -eq 1 ] && [ "x$1" = "x-h" -o "x$1" = "x--help" ]; then
+  usage 0
+elif [ $# -lt 2 -o $# -gt 3 ]; then
+  usage 1
+else
+  repo=$1
+  workdir=$2
+  if [ $# -eq 3 ]; then
+    branch=$3
+  fi
+fi
+
+dotdot ()
+{
+  case $1 in
+    */*) printf '%s/' "${1%/*}" | sed -e 's,[^/]*//*,../,g';;
+  esac
+}
+
+repo_git_dir="$(cd -- "$repo" && git rev-parse --git-dir)" \
+  || error 'not a git repository: %s' "$repo"
+git_dir="${repo}/${repo_git_dir}"
+git_dir_abs="$(cd -- "$git_dir" && pwd)"
+
+if [ -n "${branch+set}" ]; then
+  git --git-dir="$git_dir" rev-parse --quiet --verify --revs-only "$branch" \
+      >>/dev/null 2>&1 \
+    || error 'no such branch: %s' "$branch"
+fi
+
+[ xfalse = "x$(git --git-dir="$git_dir" rev-parse --is-bare-repository)" ] \
+  || error "bare repositories can't have working trees"
+
+[ ! -h "${git_dir}/config" ] \
+  || error "working trees can't have recursive working trees (XXX why not?)"
+
+mkdir -- "${workdir}"
+mkdir -- "${workdir}/.git"
+
+(
+  cd -- "$workdir"
+  (
+    cd .git
+    case $git_dir in
+      /*) git_dir_ref="${git_dir_abs}";;
+      *)  git_dir_ref="../../$(dotdot "$workdir")${git_dir}"
+          if [ "x$(cd -- "$git_dir_ref" && pwd)" != "x$git_dir_abs" ]; then
+            warn 'relative reference ../%s broken' "$git_dir"
+            git_dir_ref="${git_dir_abs}"
+          fi;;
+    esac
+    case $git_dir_ref in
+      /*) warn 'using absolute pathname %s' "$git_dir_ref";;
+    esac
+    for subdir in ${GIT_SUBDIRS} ${GIT_EXTRA_SUBDIRS}; do
+      case $subdir in */*) mkdir -p -- "${subdir%/*}";; esac
+      case $git_dir_ref in
+        /*) git_subdir_ref="$git_dir_ref";;
+        *)  git_subdir_ref="$(dotdot "$subdir")${git_dir_ref}";;
+      esac
+      ln -s -- "${git_subdir_ref}/${subdir}" "$subdir"
+    done
+    cp -- "${git_dir_ref}/HEAD" .
+  )
+  git checkout -f ${branch+"$branch"}
+)

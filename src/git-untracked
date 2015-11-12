@@ -1,0 +1,17 @@
+#!/bin/sh
+
+tmpfile=`mktemp -t "git-untracked-"`
+git status --porcelain | grep "^?" | tee $tmpfile
+if [ -s "$tmpfile" ]; then
+    read -p "Proceed despite untracked files? [Yan] " response
+    if [ -z "$response" -o "$response" == "y" -o "$response" == "Y" -o "$response" == "yes" ]
+    then
+        exit 0
+    fi
+    if [ "$response" == "a" -o "$response" == "A" -o "$response" == "add" ]; then
+        echorun git add -A
+        exit 0
+    fi
+    exit 1
+fi
+

@@ -1,0 +1,13 @@
+#!/bin/sh
+
+set -e
+git untracked
+git status
+if [ "x" != "x$@" ]; then
+    echorun git commit -a -m "$@"
+else
+    tmp="$(mktemp -t git_review_messageXXXXXX.md)"
+    echorun git difftool -y master 1>/dev/null 2>/dev/null &
+    echorun emacs -nw "$tmp"
+    echorun git commit -a -F "$tmp"
+fi

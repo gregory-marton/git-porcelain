@@ -1,0 +1,16 @@
+#!/bin/sh
+
+set -e
+for limb in $@; do
+    if [ "master" == "$limb" -o "origin" == "$limb" ]; then
+        echo "Cowardly refusing to destroy branch [$limb]".
+        exit
+    fi
+    echorun git checkout "$limb"
+    echorun git st
+    askNo "Permanently destroy branch [$limb] both locally and remotely?"
+    echorun git checkout master
+    echorun git branch -D "$limb"
+    echorun git branch -D -r "$limb" || true
+    echorun git push origin :"$limb" || true
+done

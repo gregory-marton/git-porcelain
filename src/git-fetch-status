@@ -1,0 +1,5 @@
+#/bin/sh
+set -e
+echorun git fetch
+echorun git status --short
+echorun git diff --stat origin/master
