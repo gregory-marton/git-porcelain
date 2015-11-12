@@ -1,0 +1,7 @@
+#!/bin/sh
+
+echo $NOTREALLY
+echo "$@" >&2
+if [ -z "$NOTREALLY" ]; then
+  exec "$@"
+fi

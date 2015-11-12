@@ -1,0 +1,5 @@
+#!/bin/sh
+
+read -p "$* [Ny] " response
+[ "$response" == "y" -o "$response" == "Y" -o "$response" == "yes" ] && exit 0
+exit 1
